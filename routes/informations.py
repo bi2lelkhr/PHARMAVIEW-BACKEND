@@ -50,7 +50,6 @@ def require_role(user_id, allowed_roles):
     return True, {"role": role, "email": email}
 
 
-
 @informations_bp.route("/add", methods=["POST"])
 def add_information():
     decoded, error = verify_token(request)
@@ -82,6 +81,29 @@ def add_information():
     }), 201
 
 
+# @informations_bp.route("/my-informations", methods=["GET"])
+# def get_my_informations():
+#     decoded, error = verify_token(request)
+#     if error:
+#         return jsonify({"error": error}), 401
+
+#     allowed, _ = require_role(decoded["user_id"], ["D", "A"])
+#     if not allowed:
+#         return jsonify({"error": "Access denied"}), 403
+
+#     infos = (
+#         supabase.table("informations")
+#         .select("*")
+#         .eq("user_id", decoded["user_id"])
+#         .order("created_at", desc=True)
+#         .execute()
+#     )
+
+#     return jsonify({
+#         "count": len(infos.data),
+#         "data": infos.data
+#     })
+
 
 @informations_bp.route("/my-informations", methods=["GET"])
 def get_my_informations():
@@ -89,7 +111,8 @@ def get_my_informations():
     if error:
         return jsonify({"error": error}), 401
 
-    allowed, _ = require_role(decoded["user_id"], ["D", "A"])
+    
+    allowed, _ = require_role(decoded["user_id"], ["D", "A", "R"])
     if not allowed:
         return jsonify({"error": "Access denied"}), 403
 
@@ -106,6 +129,36 @@ def get_my_informations():
         "data": infos.data
     })
 
+@informations_bp.route("/<information_id>", methods=["DELETE"])
+def delete_information(information_id):
+    # Verify token
+    decoded, error = verify_token(request)
+    if error:
+        return jsonify({"error": error}), 401
+
+    # Check admin role only
+    allowed, _ = require_role(decoded["user_id"], ["A"])
+    if not allowed:
+        return jsonify({"error": "Access denied"}), 403
+
+    # Check if information exists
+    info = (
+        supabase.table("informations")
+        .select("id")
+        .eq("id", information_id)
+        .execute()
+    )
+
+    if not info.data:
+        return jsonify({"error": "Information not found"}), 404
+
+    # Delete information
+    supabase.table("informations").delete().eq("id", information_id).execute()
+
+    return jsonify({
+        "message": "Information deleted successfully",
+        "id": information_id
+    }), 200
 
 
 @informations_bp.route("/profile", methods=["GET"])
@@ -133,7 +186,6 @@ def get_profile():
         "view": user.data["view"],  # 👈 added
         "name": user.data["email"].split("@")[0]
     })
-
 
 
 @informations_bp.route("/all-informations", methods=["GET"])
@@ -186,13 +238,12 @@ def get_users():
     users = (
         supabase
         .table("users")
-        .select("id, email, role, user_code, view, created_at")  # 👈 view added
+        .select("id, email, role, user_code, view, created_at")  
         .order("created_at", desc=True)
         .execute()
     )
 
     return jsonify(users.data)
-
 
 
 @informations_bp.route("/users", methods=["POST"])
@@ -238,7 +289,7 @@ def create_user():
         "role": role
     }
 
-
+    # 👇 Add view only when role == R
     if role == "R":
         user_data["view"] = view
 
@@ -278,14 +329,14 @@ def update_user(user_id):
 
     current_role = current_user.data["role"]
 
-
+  
     if "email" in data:
         update_data["email"] = data["email"]
 
     if "user_code" in data:
         update_data["user_code"] = data["user_code"]
 
-
+  
     new_role = current_role
     if "role" in data:
         if data["role"] not in ["A", "D", "R"]:
@@ -293,14 +344,14 @@ def update_user(user_id):
         new_role = data["role"]
         update_data["role"] = new_role
 
-
+  
     if new_role == "R":
-
+    
         if "view" not in data:
             return jsonify({"error": "View is required for role R"}), 400
         update_data["view"] = data["view"]
     else:
-
+      
         update_data["view"] = None
 
     if not update_data:
@@ -328,10 +379,6 @@ def delete_user(user_id):
     return jsonify({"message": "User deleted successfully"})
 
 
-
-
-
-
 @informations_bp.route("/my-view", methods=["GET"])
 def get_my_view():
     decoded, error = verify_token(request)
@@ -342,7 +389,7 @@ def get_my_view():
     if not allowed:
         return jsonify({"error": "Access denied"}), 403
 
- 
+  
     res_user = supabase.table("users").select("view").eq("id", decoded["user_id"]).single().execute()
     if not res_user.data or not res_user.data.get("view"):
         return jsonify({"error": "No view assigned to user"}), 403
@@ -357,7 +404,7 @@ def get_my_view():
     if "ALL" not in user_view:
         query = query.in_("type_bu", user_view)
     
- 
+
     else:
         type_bu = request.args.get("type_bu")
         if type_bu:
@@ -379,16 +426,16 @@ def get_my_view():
 
     res = query.order("created_at", desc=True).execute()
     
-   
+
     user_ids = [info["user_id"] for info in res.data if info.get("user_id")]
     
-   
+
     users_data = {}
     if user_ids:
         users_res = supabase.table("users").select("id, email").in_("id", user_ids).execute()
         users_data = {user["id"]: user["email"] for user in users_res.data}
     
- 
+
     combined_data = []
     for info in res.data:
         info_copy = info.copy()
@@ -403,36 +450,3 @@ def get_my_view():
         "count": len(combined_data),
         "data": combined_data
     })
-
-
-@informations_bp.route("/<information_id>", methods=["DELETE"])
-def delete_information(information_id):
-    
-    decoded, error = verify_token(request)
-    if error:
-        return jsonify({"error": error}), 401
-
-  
-    allowed, _ = require_role(decoded["user_id"], ["A"])
-    if not allowed:
-        return jsonify({"error": "Access denied"}), 403
-
-  
-    info = (
-        supabase.table("informations")
-        .select("id")
-        .eq("id", information_id)
-        .execute()
-    )
-
-    if not info.data:
-        return jsonify({"error": "Information not found"}), 404
-
- 
-    supabase.table("informations").delete().eq("id", information_id).execute()
-
-    return jsonify({
-        "message": "Information deleted successfully",
-        "id": information_id
-    }), 200
-
