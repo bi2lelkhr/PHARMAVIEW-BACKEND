@@ -3,9 +3,27 @@ from db.supabase import supabase
 import jwt
 import os
 from dotenv import load_dotenv
+import cloudinary
+import cloudinary.uploader
+
 
 load_dotenv()
 SECRET_KEY = os.getenv("JWT_SECRET", "mysecretkey")
+
+# Cloudinary configuration from environment variables
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
+CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
+
+# Validate Cloudinary configuration
+if not all([CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET]):
+    raise ValueError("Missing Cloudinary configuration in environment variables")
+
+cloudinary.config(
+    cloud_name=CLOUDINARY_CLOUD_NAME,
+    api_key=CLOUDINARY_API_KEY,
+    api_secret=CLOUDINARY_API_SECRET
+)
 
 informations_bp = Blueprint("informations", __name__)
 
@@ -56,53 +74,45 @@ def add_information():
     if error:
         return jsonify({"error": error}), 401
 
-    data = request.json or {}
+    # Get form data
+    type_bu = request.form.get("type_bu")
+    type_info = request.form.get("type_info")
+    info_date = request.form.get("info_date")
 
-    if not all([
-        data.get("type_bu"),
-        data.get("type_info"),
-        data.get("info_date")
-    ]):
+    if not all([type_bu, type_info, info_date]):
         return jsonify({"error": "Missing required fields"}), 400
 
+    image_url = None
+
+    # Check if image exists and upload to Cloudinary
+    if "image" in request.files:
+        image = request.files["image"]
+        if image and image.filename:  # Check if file is not empty
+            try:
+                upload_result = cloudinary.uploader.upload(
+                    image,
+                    folder="informations"
+                )
+                image_url = upload_result.get("secure_url")
+            except Exception as e:
+                return jsonify({"error": f"Image upload failed: {str(e)}"}), 500
+
+    # Insert into Supabase
     res = supabase.table("informations").insert({
         "user_id": decoded["user_id"],
-        "type_bu": data.get("type_bu"),
-        "type_info": data.get("type_info"),
-        "laboratoire": data.get("laboratoire"),
-        "produit_concurent": data.get("produit"),
-        "info_date": data.get("info_date"),
-        "comment": data.get("comment"),
+        "type_bu": type_bu,
+        "type_info": type_info,
+        "laboratoire": request.form.get("laboratoire"),
+        "produit_concurent": request.form.get("produit"),
+        "info_date": info_date,
+        "comment": request.form.get("comment"),
+        "image_url": image_url
     }).execute()
 
     return jsonify({
         "message": "Information saved",
         "data": res.data
     }), 201
-
-
-# @informations_bp.route("/my-informations", methods=["GET"])
-# def get_my_informations():
-#     decoded, error = verify_token(request)
-#     if error:
-#         return jsonify({"error": error}), 401
-
-#     allowed, _ = require_role(decoded["user_id"], ["D", "A"])
-#     if not allowed:
-#         return jsonify({"error": "Access denied"}), 403
-
-#     infos = (
-#         supabase.table("informations")
-#         .select("*")
-#         .eq("user_id", decoded["user_id"])
-#         .order("created_at", desc=True)
-#         .execute()
-#     )
-
-#     return jsonify({
-#         "count": len(infos.data),
-#         "data": infos.data
-#     })
 
 
 @informations_bp.route("/my-informations", methods=["GET"])
@@ -128,6 +138,7 @@ def get_my_informations():
         "count": len(infos.data),
         "data": infos.data
     })
+
 
 @informations_bp.route("/<information_id>", methods=["DELETE"])
 def delete_information(information_id):
@@ -183,7 +194,7 @@ def get_profile():
         "user_id": decoded["user_id"],
         "email": user.data["email"],
         "role": user.data["role"],
-        "view": user.data["view"],  # 👈 added
+        "view": user.data["view"],
         "name": user.data["email"].split("@")[0]
     })
 
@@ -269,11 +280,11 @@ def create_user():
     if role not in ["A", "D", "R"]:
         return jsonify({"error": "Invalid role"}), 400
 
-    # 👇 Require view ONLY for role R
+    # Require view ONLY for role R
     if role == "R" and not view:
         return jsonify({"error": "View is required for role R"}), 400
 
-    # 👇 Prevent view for non-R roles
+    # Prevent view for non-R roles
     if role != "R" and view is not None:
         return jsonify({"error": "View is only allowed for role R"}), 400
 
@@ -289,7 +300,7 @@ def create_user():
         "role": role
     }
 
-    # 👇 Add view only when role == R
+    # Add view only when role == R
     if role == "R":
         user_data["view"] = view
 
@@ -314,7 +325,6 @@ def update_user(user_id):
     data = request.json or {}
     update_data = {}
 
-
     current_user = (
         supabase
         .table("users")
@@ -329,14 +339,12 @@ def update_user(user_id):
 
     current_role = current_user.data["role"]
 
-  
     if "email" in data:
         update_data["email"] = data["email"]
 
     if "user_code" in data:
         update_data["user_code"] = data["user_code"]
 
-  
     new_role = current_role
     if "role" in data:
         if data["role"] not in ["A", "D", "R"]:
@@ -344,14 +352,11 @@ def update_user(user_id):
         new_role = data["role"]
         update_data["role"] = new_role
 
-  
     if new_role == "R":
-    
         if "view" not in data:
             return jsonify({"error": "View is required for role R"}), 400
         update_data["view"] = data["view"]
     else:
-      
         update_data["view"] = None
 
     if not update_data:
@@ -389,7 +394,6 @@ def get_my_view():
     if not allowed:
         return jsonify({"error": "Access denied"}), 403
 
-  
     res_user = supabase.table("users").select("view").eq("id", decoded["user_id"]).single().execute()
     if not res_user.data or not res_user.data.get("view"):
         return jsonify({"error": "No view assigned to user"}), 403
@@ -397,19 +401,14 @@ def get_my_view():
     user_view = res_user.data.get("view").split(",")  
     user_view = [v.strip() for v in user_view]  
 
-
     query = supabase.table("informations").select("*")
-
 
     if "ALL" not in user_view:
         query = query.in_("type_bu", user_view)
-    
-
     else:
         type_bu = request.args.get("type_bu")
         if type_bu:
             query = query.eq("type_bu", type_bu)
-
 
     type_info = request.args.get("type_info")
     info_date = request.args.get("date")
@@ -425,16 +424,13 @@ def get_my_view():
         query = query.gte("info_date", from_date).lte("info_date", to_date)
 
     res = query.order("created_at", desc=True).execute()
-    
 
     user_ids = [info["user_id"] for info in res.data if info.get("user_id")]
-    
 
     users_data = {}
     if user_ids:
         users_res = supabase.table("users").select("id, email").in_("id", user_ids).execute()
         users_data = {user["id"]: user["email"] for user in users_res.data}
-    
 
     combined_data = []
     for info in res.data:
