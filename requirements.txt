@@ -8,3 +8,4 @@ serverless-wsgi
 gunicorn
 flask-cors
 requests
+cloudinary
